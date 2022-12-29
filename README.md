@@ -1,4 +1,4 @@
-# Demo of elm-2d-camera
+# Demo of elm-2d-camera adaped to OO style
 
 To run the example:
 
