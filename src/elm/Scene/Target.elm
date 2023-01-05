@@ -1,18 +1,15 @@
 module Scene.Target exposing (..)
 
 import BoundingBox2d
-import Camera2d
 import Circle2d
 import Color
-import Geometry exposing (BLocal, PScene, PScreen, Screen)
+import Geometry exposing (BLocal, PScene, VScene)
 import Geometry.Svg
 import Html.Attributes as HA
 import Json.Encode as Encode
 import Point2d
-import Pointer
 import Quantity
 import Scene.Spec as Spec exposing (Entity, EntityId, UpdateContext(..), ViewContextIF)
-import Tuple2
 import TypedSvg as Svg
 import TypedSvg.Attributes as SvgAttr
 import TypedSvg.Attributes.InPx as InPx
@@ -27,15 +24,9 @@ import Vector2d
 
 type alias Target =
     { id : EntityId
-    , gestureCondition : GestureCondition
     , pos : PScene
     , bbox : BLocal
     }
-
-
-type GestureCondition
-    = NoGesture
-    | Moving PScreen
 
 
 {-| A drawing of a target.
@@ -43,21 +34,14 @@ type GestureCondition
 target : EntityId -> Entity msg
 target id =
     Spec.entity
-        { gestureHandler =
-            { tap = Nothing
-            , doubleTap = Just onDoubleTap
-            , drag = Just onDrag
-            , dragEnd = Just onDragEnd
-            }
-                |> Just
-        , move = \_ model -> model
+        { move = onMove
+        , select = onSelect
         , animate = \_ _ -> Nothing
         , position = .pos
         , bbox = .bbox
         , view = \context model -> [ view context model ]
         }
         { id = id
-        , gestureCondition = NoGesture
         , pos = Point2d.origin
         , bbox =
             BoundingBox2d.fromExtrema
@@ -69,90 +53,25 @@ target id =
         }
 
 
-onDoubleTap :
-    Pointer.PointArgs Screen
+onMove :
+    VScene
     -> Target
     -> (Target -> Entity msg)
     -> UpdateContext msg
     -> UpdateContext msg
-onDoubleTap _ model _ (UpdateContext uc) =
-    let
-        origin =
-            Camera2d.origin uc.camera
-
-        destination =
-            model.pos
-
-        translation =
-            Vector2d.from origin destination
-
-        targetBBox =
-            model.bbox
-
-        largestTargetDim =
-            BoundingBox2d.dimensions targetBBox
-                |> Tuple2.uncurry Quantity.max
-                |> Quantity.multiplyBy 1.1
-
-        smallestFrameDim =
-            BoundingBox2d.dimensions uc.frame
-                |> Tuple2.uncurry Quantity.min
-
-        zoom =
-            Quantity.rate smallestFrameDim largestTargetDim
-
-        targetCamera =
-            uc.camera
-                |> Camera2d.translateBy translation
-                |> Camera2d.setZoom zoom
-                |> Camera2d.toZoomSpace
-    in
-    uc.animateZoomToTarget targetCamera
-
-
-onDrag :
-    Pointer.DragArgs Screen
-    -> Target
-    -> (Target -> Entity msg)
-    -> UpdateContext msg
-    -> UpdateContext msg
-onDrag args model raise (UpdateContext uc) =
-    let
-        prevPos =
-            case model.gestureCondition of
-                NoGesture ->
-                    args.startPos
-
-                Moving pos ->
-                    pos
-
-        prevPosScene =
-            Camera2d.pointToScene uc.camera uc.frame prevPos
-
-        curPosScene =
-            Camera2d.pointToScene uc.camera uc.frame args.pos
-
-        trans =
-            Vector2d.from prevPosScene curPosScene
-    in
-    { model
-        | gestureCondition = Moving args.pos
-        , pos = Point2d.translateBy trans model.pos
-    }
+onMove trans model raise (UpdateContext uc) =
+    { model | pos = Point2d.translateBy trans model.pos }
         |> raise
         |> uc.updateEntity model.id
 
 
-onDragEnd :
-    Pointer.DragArgs Screen
-    -> Target
+onSelect :
+    Target
     -> (Target -> Entity msg)
     -> UpdateContext msg
     -> UpdateContext msg
-onDragEnd _ model raise (UpdateContext uc) =
-    { model | gestureCondition = NoGesture }
-        |> raise
-        |> uc.updateEntity model.id
+onSelect model _ (UpdateContext uc) =
+    uc.zoomToBox model.pos model.bbox 1.1
 
 
 view : ViewContextIF msg -> Target -> Svg msg

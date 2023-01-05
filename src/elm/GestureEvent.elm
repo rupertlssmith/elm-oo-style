@@ -3,12 +3,8 @@ module GestureEvent exposing
     , gestureDecoder
     )
 
-import BoundingBox2d
-import Geometry exposing (BScreen, PScreen)
 import Json.Decode as Decode exposing (Decoder)
 import Json.Decode.Extra as DE
-import Pixels
-import Point2d
 import Pointer exposing (EventKind)
 
 

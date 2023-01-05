@@ -7,19 +7,15 @@ This also acts as the camera controller for pan and zoom.
 -}
 
 import BoundingBox2d
-import Camera2d exposing (Camera2d, ZoomSpace)
 import Color
-import Geometry exposing (PScreen, Scene, Screen)
+import Geometry exposing (VScene)
 import Geometry.Svg
-import GestureEvent exposing (GestureEvent)
 import Html.Attributes as HA
-import Pixels exposing (Pixels)
+import Pixels
 import Point2d
-import Point3d
-import Pointer
-import Quantity exposing (Unitless)
+import Quantity
 import Rectangle2d
-import Scene.Spec as Spec exposing (Entity, EntityId, UpdateContext(..), UpdateContextIF, ViewContextIF)
+import Scene.Spec as Spec exposing (Entity, EntityId, UpdateContext(..), ViewContextIF)
 import Style
 import TypedSvg as Svg
 import TypedSvg.Attributes as SvgAttr
@@ -36,26 +32,14 @@ import Vector2d
 
 type alias Root =
     { id : EntityId
-    , gestureCondition : GestureCondition
     }
-
-
-type GestureCondition
-    = NoGesture
-    | MovingCamera PScreen
 
 
 root : EntityId -> Entity msg
 root id =
     Spec.entity
-        { gestureHandler =
-            { tap = Nothing
-            , doubleTap = Nothing
-            , drag = Just onDrag
-            , dragEnd = Just onDragEnd
-            }
-                |> Just
-        , move = \_ drawing -> drawing
+        { move = onMove
+        , select = \_ _ uc -> uc
         , animate = \_ _ -> Nothing
         , position = always Point2d.origin
         , bbox = always (BoundingBox2d.from Point2d.origin Point2d.origin)
@@ -66,49 +50,17 @@ root id =
                 ]
         }
         { id = id
-        , gestureCondition = NoGesture
         }
 
 
-onDrag :
-    Pointer.DragArgs Screen
+onMove :
+    VScene
     -> Root
     -> (Root -> Entity msg)
     -> UpdateContext msg
     -> UpdateContext msg
-onDrag args model raise (UpdateContext uc) =
-    let
-        prevPos =
-            case model.gestureCondition of
-                NoGesture ->
-                    args.startPos
-
-                MovingCamera pos ->
-                    pos
-
-        camera =
-            Camera2d.translateByScreenVector
-                (Vector2d.from args.pos prevPos)
-                uc.camera
-
-        e =
-            { model | gestureCondition = MovingCamera args.pos }
-                |> raise
-    in
-    uc.setCamera camera
-        |> Spec.ucAndThen (Spec.updateEntity model.id e)
-
-
-onDragEnd :
-    Pointer.DragArgs Screen
-    -> Root
-    -> (Root -> Entity msg)
-    -> UpdateContext msg
-    -> UpdateContext msg
-onDragEnd _ model raise (UpdateContext uc) =
-    { model | gestureCondition = NoGesture }
-        |> raise
-        |> uc.updateEntity model.id
+onMove trans _ _ (UpdateContext uc) =
+    uc.moveCamera (Vector2d.reverse trans)
 
 
 gridPattern : ViewContextIF msg -> Root -> Svg msg

@@ -1,12 +1,11 @@
 module Scene.Spec exposing (..)
 
-import Camera2d exposing (Camera2d, ZoomSpace)
+import Camera2d exposing (Camera2d)
 import Existential as E
 import Geometry exposing (BLocal, BScreen, PScene, PScreen, Screen, VScene, VScreen)
 import GestureEvent exposing (GestureEvent)
 import Html exposing (Html)
 import Pixels exposing (Pixels)
-import Point3d exposing (Point3d)
 import Pointer
 import Quantity exposing (Unitless)
 import Time exposing (Posix)
@@ -91,8 +90,8 @@ type UpdateContext msg
 type alias UpdateContextIF msg =
     { frame : BScreen
     , camera : Camera2d Unitless Pixels Geometry.Scene
-    , setCamera : Camera2d Unitless Pixels Geometry.Scene -> UpdateContext msg
-    , animateZoomToTarget : Point3d Unitless (ZoomSpace Pixels Geometry.Scene) -> UpdateContext msg
+    , moveCamera : VScene -> UpdateContext msg
+    , zoomToBox : PScene -> BLocal -> Float -> UpdateContext msg
     , updateEntity : EntityId -> Entity msg -> UpdateContext msg
     , toScene : Scene
     }
@@ -101,8 +100,8 @@ type alias UpdateContextIF msg =
 type alias UpdateContextCons rep msg =
     { frame : rep -> BScreen
     , camera : rep -> Camera2d Unitless Pixels Geometry.Scene
-    , setCamera : Camera2d Unitless Pixels Geometry.Scene -> rep -> rep
-    , animateZoomToTarget : Point3d Unitless (ZoomSpace Pixels Geometry.Scene) -> rep -> rep
+    , moveCamera : VScene -> rep -> rep
+    , zoomToBox : PScene -> BLocal -> Float -> rep -> rep
     , updateEntity : EntityId -> Entity msg -> rep -> rep
     , toScene : rep -> Scene
     }
@@ -113,8 +112,8 @@ updateContext cons =
     E.impl UpdateContextIF
         |> E.add (\rep -> cons.frame rep)
         |> E.add (\rep -> cons.camera rep)
-        |> E.wrap (\raise rep camera -> cons.setCamera camera rep |> raise)
-        |> E.wrap (\raise rep target -> cons.animateZoomToTarget target rep |> raise)
+        |> E.wrap (\raise rep vscene -> cons.moveCamera vscene rep |> raise)
+        |> E.wrap (\raise rep pos bbox scale -> cons.zoomToBox pos bbox scale rep |> raise)
         |> E.wrap (\raise rep eid e -> cons.updateEntity eid e rep |> raise)
         |> E.add (\rep -> cons.toScene rep)
         |> E.map UpdateContext
@@ -157,8 +156,8 @@ type Entity msg
 
 
 type alias EntityIF msg =
-    { gestureHandler : Maybe (GestureIF msg)
-    , move : VScene -> Entity msg
+    { move : VScene -> UpdateContext msg -> UpdateContext msg
+    , select : UpdateContext msg -> UpdateContext msg
     , animate : Posix -> Maybe (Entity msg)
     , position : PScene
     , bbox : BLocal
@@ -167,8 +166,8 @@ type alias EntityIF msg =
 
 
 type alias EntityCons msg rep =
-    { gestureHandler : Maybe (GestureCons rep msg)
-    , move : VScene -> rep -> rep
+    { move : VScene -> rep -> (rep -> Entity msg) -> UpdateContext msg -> UpdateContext msg
+    , select : rep -> (rep -> Entity msg) -> UpdateContext msg -> UpdateContext msg
     , animate : Posix -> rep -> Maybe rep
     , position : rep -> PScene
     , bbox : rep -> BLocal
@@ -176,43 +175,11 @@ type alias EntityCons msg rep =
     }
 
 
-type alias GestureIF msg =
-    { tap : Maybe (Pointer.PointArgs Screen -> UpdateContext msg -> UpdateContext msg)
-    , doubleTap : Maybe (Pointer.PointArgs Screen -> UpdateContext msg -> UpdateContext msg)
-    , drag : Maybe (Pointer.DragArgs Screen -> UpdateContext msg -> UpdateContext msg)
-    , dragEnd : Maybe (Pointer.DragArgs Screen -> UpdateContext msg -> UpdateContext msg)
-    }
-
-
-type alias GestureCons rep msg =
-    { tap : Maybe (Pointer.PointArgs Screen -> rep -> (rep -> Entity msg) -> UpdateContext msg -> UpdateContext msg)
-    , doubleTap : Maybe (Pointer.PointArgs Screen -> rep -> (rep -> Entity msg) -> UpdateContext msg -> UpdateContext msg)
-    , drag : Maybe (Pointer.DragArgs Screen -> rep -> (rep -> Entity msg) -> UpdateContext msg -> UpdateContext msg)
-    , dragEnd : Maybe (Pointer.DragArgs Screen -> rep -> (rep -> Entity msg) -> UpdateContext msg -> UpdateContext msg)
-    }
-
-
 entity : EntityCons msg rep -> rep -> Entity msg
 entity cons =
-    let
-        wrapGesture maybeHandler raise rep =
-            maybeHandler
-                |> Maybe.map (\gestureFn args uc -> gestureFn args rep raise uc)
-    in
     E.impl EntityIF
-        |> E.wrap
-            (\raise rep ->
-                cons.gestureHandler
-                    |> Maybe.map
-                        (\gestureCons ->
-                            { tap = wrapGesture gestureCons.tap raise rep
-                            , doubleTap = wrapGesture gestureCons.doubleTap raise rep
-                            , drag = wrapGesture gestureCons.drag raise rep
-                            , dragEnd = wrapGesture gestureCons.dragEnd raise rep
-                            }
-                        )
-            )
-        |> E.wrap (\raise rep vec -> raise (cons.move vec rep))
+        |> E.wrap (\raise rep vec uc -> cons.move vec rep raise uc)
+        |> E.wrap (\raise rep uc -> cons.select rep raise uc)
         |> E.wrap (\raise rep posix -> cons.animate posix rep |> Maybe.map raise)
         |> E.add (\rep -> cons.position rep)
         |> E.add (\rep -> cons.bbox rep)

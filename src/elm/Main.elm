@@ -6,7 +6,6 @@ import Browser.Events
 import Config
 import Css.Global
 import Geometry exposing (VScreen)
-import GestureEvent exposing (GestureEvent)
 import Html as H exposing (Html)
 import Html.Attributes as HA
 import Html.Lazy

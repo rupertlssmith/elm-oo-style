@@ -5,14 +5,14 @@ import BoundingBox2d
 import Camera2d exposing (Camera2d, ZoomSpace)
 import Config
 import Dict exposing (Dict)
-import Geometry exposing (BScreen, PScreen, Screen, VScreen)
+import Geometry exposing (BLocal, BScreen, PScene, PScreen, Screen, VScene, VScreen)
 import GestureEvent exposing (GestureEvent)
 import Html as H exposing (Html)
 import Html.Attributes as HA
 import Params
 import Pixels exposing (Pixels)
 import Point2d
-import Point3d exposing (Point3d)
+import Point3d
 import Pointer
 import Ports
 import Quantity exposing (Unitless)
@@ -75,6 +75,7 @@ type alias Drawing =
     , zoom : Float
     , gesturesOnDoc : Pointer.Model GestureEvent Msg Screen
     , gesturesOnDiv : Pointer.Model GestureEvent Msg Screen
+    , gestureCondition : GestureCondition
     , camera : Camera2d Unitless Pixels Geometry.Scene
     , zoomAnimation : Timeline ZoomState
     , mousePos : PScreen
@@ -82,6 +83,11 @@ type alias Drawing =
     , nextId : EntityId
     , rootId : EntityId
     }
+
+
+type GestureCondition
+    = NoGesture
+    | Dragging { prevPos : PScreen }
 
 
 type ZoomState
@@ -143,6 +149,7 @@ empty windowSize rootId =
             Pointer.init Nothing
                 (OnGestureMsg Div)
                 |> Pointer.apply divPointerHandler
+        , gestureCondition = NoGesture
         , camera =
             Camera2d.zoomedAt
                 Point2d.origin
@@ -195,42 +202,33 @@ animator =
 
 
 
+-- Transitions on the update context.
+
+
+toUpdateContext : (Drawing -> Scene) -> Drawing -> UpdateContext Msg
+toUpdateContext raise drawing =
+    Spec.updateContext
+        { frame = \d -> d.frame
+        , camera = \d -> d.camera
+        , moveCamera = moveCamera
+        , zoomToBox = zoomToBox
+        , updateEntity = \eid e d -> { d | entities = Dict.insert eid e d.entities }
+        , toScene = raise
+        }
+        drawing
+
+
+updateContextToScene : UpdateContext Msg -> Scene
+updateContextToScene (UpdateContext ctx) =
+    ctx.toScene
+
+
+
 -- Update
 
 
 updateScene : Msg -> Drawing -> (Drawing -> Scene) -> ( Scene, Cmd Msg )
 updateScene msg drawing raise =
-    let
-        context : UpdateContext Msg
-        context =
-            Spec.updateContext
-                { frame = \d -> d.frame
-                , camera = \d -> d.camera
-                , setCamera = \camera d -> { d | camera = camera }
-                , animateZoomToTarget = animateZoomToTarget
-                , updateEntity = \eid e d -> { d | entities = Dict.insert eid e d.entities }
-                , toScene = raise
-                }
-                drawing
-
-        contextToScene (UpdateContext ctx) =
-            ctx.toScene
-
-        handleGesture gestureArgs entityId accessor =
-            Dict.get entityId drawing.entities
-                |> Maybe.map
-                    (\(Entity e) ->
-                        e.gestureHandler
-                            |> Maybe.map
-                                (\handlers ->
-                                    accessor handlers
-                                        |> Maybe.map (\handler -> handler gestureArgs context)
-                                        |> Maybe.withDefault context
-                                )
-                            |> Maybe.withDefault context
-                    )
-                |> Maybe.withDefault context
-    in
     case msg of
         WindowSize windowSize ->
             U2.pure { drawing | window = windowSizeToBBox windowSize }
@@ -247,20 +245,19 @@ updateScene msg drawing raise =
                 |> Tuple.mapFirst raise
 
         OnGestureDrag args { id } _ ->
-            U2.pure (handleGesture args id .drag)
-                |> Tuple.mapFirst contextToScene
+            U2.pure drawing
+                |> U2.andMap (onDrag args id raise)
+                |> Tuple.mapFirst updateContextToScene
 
         OnGestureDragEnd args { id } _ ->
-            U2.pure (handleGesture args id .dragEnd)
-                |> Tuple.mapFirst contextToScene
-
-        OnGestureTap args { id } ->
-            U2.pure (handleGesture args id .tap)
-                |> Tuple.mapFirst contextToScene
+            U2.pure drawing
+                |> U2.andMap (onDragEnd args id raise)
+                |> Tuple.mapFirst updateContextToScene
 
         OnGestureDoubleTap args { id } ->
-            U2.pure (handleGesture args id .doubleTap)
-                |> Tuple.mapFirst contextToScene
+            U2.pure drawing
+                |> U2.andMap (onDoubleTap args id raise)
+                |> Tuple.mapFirst updateContextToScene
 
         OnGestureMove pos _ ->
             U2.pure { drawing | mousePos = pos }
@@ -367,23 +364,110 @@ xyzToMovement xyz =
     }
 
 
-animateZoomToTarget : Point3d Unitless (ZoomSpace Pixels Geometry.Scene) -> Drawing -> Drawing
-animateZoomToTarget targetZoomSpace drawing =
+zoomToBox : PScene -> BLocal -> Float -> Drawing -> Drawing
+zoomToBox pos bbox scale model =
     let
+        origin =
+            Camera2d.origin model.camera
+
+        translation =
+            Vector2d.from origin pos
+
+        largestTargetDim =
+            BoundingBox2d.dimensions bbox
+                |> Tuple2.uncurry Quantity.max
+                |> Quantity.multiplyBy 1.1
+
+        smallestFrameDim =
+            BoundingBox2d.dimensions model.frame
+                |> Tuple2.uncurry Quantity.min
+
+        zoom =
+            Quantity.rate smallestFrameDim largestTargetDim
+
+        targetZoomSpace =
+            model.camera
+                |> Camera2d.translateBy translation
+                |> Camera2d.setZoom zoom
+                |> Camera2d.toZoomSpace
+
         -- Derive the animation start and end states through ZoomSpace.
         start =
-            Camera2d.toZoomSpace drawing.camera
+            Camera2d.toZoomSpace model.camera
                 |> ZoomStart
 
         target =
             targetZoomSpace
                 |> ZoomTarget
     in
-    { drawing
+    { model
         | zoomAnimation =
             Animator.init start
                 |> Animator.go Animator.quickly target
     }
+
+
+moveCamera : VScene -> Drawing -> Drawing
+moveCamera vscene model =
+    let
+        camera =
+            Camera2d.translateBy vscene model.camera
+    in
+    { model | camera = camera }
+
+
+onDrag : Pointer.DragArgs Screen -> EntityId -> (Drawing -> Scene) -> Drawing -> ( UpdateContext Msg, Cmd Msg )
+onDrag args entityId raise model =
+    let
+        pp =
+            case model.gestureCondition of
+                NoGesture ->
+                    args.startPos
+
+                Dragging { prevPos } ->
+                    prevPos
+
+        prevPosScene =
+            Camera2d.pointToScene model.camera model.frame pp
+
+        curPosScene =
+            Camera2d.pointToScene model.camera model.frame args.pos
+
+        trans =
+            Vector2d.from prevPosScene curPosScene
+
+        context =
+            { model | gestureCondition = Dragging { prevPos = args.pos } }
+                |> toUpdateContext raise
+
+        newContext =
+            Dict.get entityId model.entities
+                |> Maybe.map (\(Entity e) -> e.move trans context)
+                |> Maybe.withDefault context
+    in
+    U2.pure newContext
+
+
+onDragEnd : Pointer.DragArgs Screen -> EntityId -> (Drawing -> Scene) -> Drawing -> ( UpdateContext Msg, Cmd Msg )
+onDragEnd _ id raise model =
+    { model | gestureCondition = NoGesture }
+        |> toUpdateContext raise
+        |> U2.pure
+
+
+onDoubleTap : Pointer.PointArgs Screen -> EntityId -> (Drawing -> Scene) -> Drawing -> ( UpdateContext Msg, Cmd Msg )
+onDoubleTap args entityId raise model =
+    let
+        context =
+            { model | gestureCondition = Dragging { prevPos = args.pos } }
+                |> toUpdateContext raise
+
+        newContext =
+            Dict.get entityId model.entities
+                |> Maybe.map (\(Entity e) -> e.select context)
+                |> Maybe.withDefault context
+    in
+    U2.pure newContext
 
 
 
