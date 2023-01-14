@@ -15,8 +15,6 @@ Several animations can be combined inside an `Animation` container. A subscripti
 for the `Animation` that will only be active when it contains an animations that have not completed
 all of their progress.
 
-\`
-
 -}
 
 import Browser.Events
