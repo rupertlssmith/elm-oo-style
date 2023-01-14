@@ -1,5 +1,6 @@
 module Scene.Drawing exposing (..)
 
+import Animation
 import Animator exposing (Timeline)
 import BoundingBox2d
 import Camera2d exposing (Camera2d, ZoomSpace)
