@@ -1,13 +1,21 @@
 module Animation exposing (Animation, animate, empty, step, subscriptions)
 
-{-| An animation runs from 0.0 to 1.0, in a given length of time.
+{-| An animation interpolates properties of a model based on a progress value that runs from
+0.0 to 1.0, in a given length of time.
 
-An easing function can be applied to this.
+An easing function can be applied to this. An easing function should map 0.0 to 0.0 and 1.0 to 1.0,
+but does not have to remain between these values for all inputs. An easing function can produce
+negative values or ones greater than 1.0. For example an easing may overshoot the end value and then
+come back again, if it is emulating a spring.
 
-The user provides a callback to interpolate between a start and end value, from 0.0 to 1.0.
+The user provides a callback to interpolate a model between a start and end value using the eased
+progress value.
 
-Several animations are combined to form a single suscription.
-The subscription is only active when it contains an animation that is active.
+Several animations can be combined inside an `Animation` container. A subscription can be generated
+for the `Animation` that will only be active when it contains an animations that have not completed
+all of their progress.
+
+\`
 
 -}
 
@@ -104,17 +112,13 @@ step posix (Animation states) model =
                 Running { progress, startMs, durationMs, easing, interpolate } ->
                     let
                         nextProgress =
-                            (toFloat (nowMs - startMs) / toFloat durationMs)
-                                |> easing
+                            toFloat (nowMs - startMs) / toFloat durationMs
                     in
                     if nextProgress >= 1.0 then
-                        ( stateAccum, modelAccum )
+                        ( stateAccum, interpolate 1.0 modelAccum )
 
                     else
                         let
-                            nextModel =
-                                interpolate nextProgress modelAccum
-
                             running =
                                 Running
                                     { durationMs = durationMs
@@ -124,7 +128,7 @@ step posix (Animation states) model =
                                     , startMs = startMs
                                     }
                         in
-                        ( running :: stateAccum, nextModel )
+                        ( running :: stateAccum, interpolate (easing nextProgress) modelAccum )
         )
         ( [], model )
         states
