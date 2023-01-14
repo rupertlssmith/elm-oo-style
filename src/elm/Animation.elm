@@ -1,6 +1,8 @@
 module Animation exposing (Animation, animate, empty, step, subscriptions)
 
-{-| An animation interpolates properties of a model based on a progress value that runs from
+{-| A simple and minimal animation sequencer.
+
+An animation interpolates properties of a model based on a progress value that runs from
 0.0 to 1.0, in a given length of time.
 
 An easing function can be applied to this. An easing function should map 0.0 to 0.0 and 1.0 to 1.0,
@@ -13,7 +15,8 @@ progress value.
 
 Several animations can be combined inside an `Animation` container. A subscription can be generated
 for the `Animation` that will only be active when it contains an animations that have not completed
-all of their progress.
+all of their progress. When the subscription is active is will produce messages with timestamps
+provided by `Browser.Events.onAnimationFrame`.
 
 -}
 
