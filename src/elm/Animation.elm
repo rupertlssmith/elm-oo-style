@@ -1,34 +1,37 @@
 module Animation exposing
-    ( Timeline, timeline
+    ( Timeline, timeline, value
     , Animator, empty, animate
     , subscriptions, step
     )
 
 {-| A simple and minimal animation sequencer.
 
-An animation interpolates properties of a model based on a progress value that runs from
-0.0 to 1.0, in a given length of time.
+A `Timeline` interpolates properties of a model based on a progress value that runs from 0.0 to 1.0,
+in a given length of time.
 
 An easing function can be applied to this. An easing function should map 0.0 to 0.0 and 1.0 to 1.0,
-but does not have to remain between these values for all inputs. An easing function can produce
+but does not have to remain between these values for all other inputs. An easing function can produce
 negative values or ones greater than 1.0. For example an easing may overshoot the end value and then
 come back again, if it is emulating a spring.
 
 The user provides a callback to interpolate a model between a start and end value using the eased
 progress value.
 
-Several animations can be combined inside an `Animation` container. A subscription can be generated
-for the `Animation` that will only be active when it contains an animations that have not completed
-all of their progress. When the subscription is active is will produce messages with timestamps
+Several timelines can be combined inside an `Animator` container. A subscription can be generated
+for the animator that will only be active when it contains a timeline that has not completed
+all of its progress. When the subscription is active is will produce messages with timestamps
 provided by `Browser.Events.onAnimationFrame`.
 
-
-# Build a Timeline
-
-@docs Timeline, timeline
+The active state messages can be applied to update the model using the animator and the `step`
+function.
 
 
-# Build an Animator of timelines.
+# Build a timeline and get the animated value.
+
+@docs Timeline, timeline, value
+
+
+# Build an animator of timelines.
 
 @docs Animator, empty, animate
 
@@ -67,9 +70,9 @@ type Timeline a
         , start : a
         , end : a
         , interpolate : Float -> a -> a -> a
-        , value : a
+        , curValue : a
         }
-    | Complete { value : a }
+    | Complete { curValue : a }
 
 
 {-| The Animator is a set of functions that know how to update the timelines in some model.
@@ -129,7 +132,7 @@ animate getter setter (Animator isActive stepModel) =
                                 , start = start
                                 , end = end
                                 , interpolate = interpolate
-                                , value = start
+                                , curValue = start
                                 }
                     in
                     setter running model
@@ -149,7 +152,7 @@ animate getter setter (Animator isActive stepModel) =
                                 , start = start
                                 , end = end
                                 , interpolate = interpolate
-                                , value = interpolate nextProgress start end
+                                , curValue = interpolate nextProgress start end
                                 }
                             )
                             model
@@ -160,7 +163,7 @@ animate getter setter (Animator isActive stepModel) =
                             endValue =
                                 interpolate 1.0 start end
                         in
-                        setter (Complete { value = endValue }) model
+                        setter (Complete { curValue = endValue }) model
                             |> stepModel nowMs
 
                 Complete _ ->
@@ -187,6 +190,21 @@ timeline :
     -> Timeline a
 timeline animSpec =
     Ready animSpec
+
+
+{-| Gets the current value from a timeline.
+-}
+value : Timeline a -> a
+value tl =
+    case tl of
+        Ready { start } ->
+            start
+
+        Running { curValue } ->
+            curValue
+
+        Complete { curValue } ->
+            curValue
 
 
 {-| Steps the animation, applying its easing functions and interpolations to the current posix timestamp.
