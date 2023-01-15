@@ -1,4 +1,8 @@
-module Animation exposing (Animation, animate, empty, step, subscriptions)
+module Animation exposing
+    ( Timeline, timeline
+    , Animator, empty, animate
+    , subscriptions, step
+    )
 
 {-| A simple and minimal animation sequencer.
 
@@ -18,31 +22,60 @@ for the `Animation` that will only be active when it contains an animations that
 all of their progress. When the subscription is active is will produce messages with timestamps
 provided by `Browser.Events.onAnimationFrame`.
 
+
+# Build a Timeline
+
+@docs Timeline, timeline
+
+
+# Build an Animator of timelines.
+
+@docs Animator, empty, animate
+
+
+# Subscribe to the animation frame, and step the model.
+
+@docs subscriptions, step
+
 -}
 
 import Browser.Events
 import Time exposing (Posix)
 
 
-type State a
+{-| A Timeline describes the timeline of something being animated.
+
+The timeline has a start time and value and an end time and value. Between those times, the value
+will be interpolated between its start and end values by a user supplied interpolation function.
+
+Outside of the period between the start and end times, the timeline will be considerd inactive,
+and no timer subscription created for it.
+
+-}
+type Timeline a
     = Ready
         { durationMs : Int
         , easing : Float -> Float
-        , interpolate : Float -> a -> a
+        , start : a
+        , end : a
+        , interpolate : Float -> a -> a -> a
         }
     | Running
-        { progress : Float
-        , startMs : Int
+        { startMs : Int
         , durationMs : Int
         , easing : Float -> Float
-        , interpolate : Float -> a -> a
+        , start : a
+        , end : a
+        , interpolate : Float -> a -> a -> a
+        , value : a
         }
+    | Complete { value : a }
 
 
-{-| Animation is a container for 1 or more things that can animate the properies of some model `a`.
+{-| The Animator is a set of functions that know how to update the timelines in some model.
 -}
-type Animation a
-    = Animation (List (State a))
+type Animator mdl
+    = Animator (mdl -> Bool) (Int -> mdl -> mdl)
 
 
 {-| given an animation and a function to create a message from a timestamp, will generate a subscription
@@ -51,86 +84,113 @@ to listen to the animation frame callback and generate messages when it is ready
 The subscription will only be active if the animation has Running states.
 
 -}
-subscriptions : Animation a -> (Posix -> msg) -> Sub msg
-subscriptions (Animation states) toMsg =
-    case states of
-        [] ->
-            Sub.none
+subscriptions : mdl -> Animator mdl -> (Posix -> msg) -> Sub msg
+subscriptions model (Animator isActive _) toMsg =
+    if isActive model then
+        Browser.Events.onAnimationFrame toMsg
 
-        _ ->
-            Browser.Events.onAnimationFrame toMsg
+    else
+        Sub.none
 
 
-{-| Creates an empty animation, to act as a container to which more animations can be added.
+{-| Creates an empty animator, to act as a container to which more timelines can be added.
 -}
-empty : Animation a
+empty : Animator mdl
 empty =
-    Animation []
+    Animator (always False) (always identity)
 
 
-{-| Adds something to animate to an animation container by specifying:
-
-    * The duration in ms the animation is to run for.
-    * An easing function.
-    * An interpolation function to update some model.
-
+{-| Adds a timeline to animate to the Animator. Functions to extract and update the timeline
+on some model must be given.
 -}
-animate : Int -> (Float -> Float) -> (Float -> a -> a) -> Animation a -> Animation a
-animate durationMs easing interpolate (Animation states) =
-    Ready
-        { durationMs = durationMs
-        , easing = easing
-        , interpolate = interpolate
-        }
-        :: states
-        |> Animation
-
-
-{-| Steps the animation, applying its easing functions and interpolations to the current posix timestamp.
--}
-step : Posix -> Animation a -> a -> ( Animation a, a )
-step posix (Animation states) model =
+animate : (mdl -> Timeline a) -> (Timeline a -> mdl -> mdl) -> Animator mdl -> Animator mdl
+animate getter setter (Animator isActive stepModel) =
     let
-        nowMs =
-            Time.posixToMillis posix
-    in
-    List.foldr
-        (\state ( stateAccum, modelAccum ) ->
-            case state of
-                Ready { durationMs, easing, interpolate } ->
+        nextIsActive model =
+            case getter model of
+                Ready _ ->
+                    True
+
+                Running _ ->
+                    True
+
+                Complete _ ->
+                    isActive model
+
+        nextStepModel nowMs model =
+            case getter model of
+                Ready { durationMs, easing, start, end, interpolate } ->
                     let
                         running =
                             Running
                                 { durationMs = durationMs
                                 , easing = easing
-                                , interpolate = interpolate
-                                , progress = 0.0
                                 , startMs = nowMs
+                                , start = start
+                                , end = end
+                                , interpolate = interpolate
+                                , value = start
                                 }
                     in
-                    ( running :: stateAccum, modelAccum )
+                    setter running model
+                        |> stepModel nowMs
 
-                Running { progress, startMs, durationMs, easing, interpolate } ->
+                Running { startMs, durationMs, easing, start, end, interpolate } ->
                     let
                         nextProgress =
                             toFloat (nowMs - startMs) / toFloat durationMs
                     in
                     if nextProgress >= 1.0 then
-                        ( stateAccum, interpolate 1.0 modelAccum )
+                        setter
+                            (Running
+                                { durationMs = durationMs
+                                , easing = easing
+                                , startMs = nowMs
+                                , start = start
+                                , end = end
+                                , interpolate = interpolate
+                                , value = interpolate nextProgress start end
+                                }
+                            )
+                            model
+                            |> stepModel nowMs
 
                     else
                         let
-                            running =
-                                Running
-                                    { durationMs = durationMs
-                                    , easing = easing
-                                    , interpolate = interpolate
-                                    , progress = progress
-                                    , startMs = startMs
-                                    }
+                            endValue =
+                                interpolate 1.0 start end
                         in
-                        ( running :: stateAccum, interpolate (easing nextProgress) modelAccum )
-        )
-        ( [], model )
-        states
-        |> Tuple.mapFirst Animation
+                        setter (Complete { value = endValue }) model
+                            |> stepModel nowMs
+
+                Complete _ ->
+                    stepModel nowMs model
+    in
+    Animator nextIsActive nextStepModel
+
+
+{-| Creates an animation Timeline by specifying:
+
+    * The duration in milliseconds the animation is to run for.
+    * An easing function (use `identity` is no easing is required).
+    * An interpolation function to update some model.
+    * The start and end states to animate betwen.
+
+-}
+timeline :
+    { durationMs : Int
+    , easing : Float -> Float
+    , start : a
+    , end : a
+    , interpolate : Float -> a -> a -> a
+    }
+    -> Timeline a
+timeline animSpec =
+    Ready animSpec
+
+
+{-| Steps the animation, applying its easing functions and interpolations to the current posix timestamp.
+-}
+step : Posix -> Animator mdl -> mdl -> mdl
+step posix (Animator _ stepModel) model =
+    stepModel (Time.posixToMillis posix) model
