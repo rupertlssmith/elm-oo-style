@@ -1,11 +1,11 @@
 module Scene.Drawing exposing (..)
 
-import Animation
-import Animator exposing (Timeline)
+import Animation exposing (Animator, Timeline)
 import BoundingBox2d
 import Camera2d exposing (Camera2d, ZoomSpace)
 import Config
 import Dict exposing (Dict)
+import Ease
 import Geometry exposing (BLocal, BScreen, PScene, PScreen, Screen, VScene, VScreen)
 import GestureEvent exposing (GestureEvent)
 import Html as H exposing (Html)
@@ -13,7 +13,7 @@ import Html.Attributes as HA
 import Params
 import Pixels exposing (Pixels)
 import Point2d
-import Point3d
+import Point3d exposing (Point3d)
 import Pointer
 import Ports
 import Quantity exposing (Unitless)
@@ -78,7 +78,7 @@ type alias Drawing =
     , gesturesOnDiv : Pointer.Model GestureEvent Msg Screen
     , gestureCondition : GestureCondition
     , camera : Camera2d Unitless Pixels Geometry.Scene
-    , zoomAnimation : Timeline ZoomState
+    , zoomAnimation : Timeline (Point3d Unitless (ZoomSpace Pixels Geometry.Scene))
     , mousePos : PScreen
     , entities : Dict EntityId (Entity Msg)
     , nextId : EntityId
@@ -89,12 +89,6 @@ type alias Drawing =
 type GestureCondition
     = NoGesture
     | Dragging { prevPos : PScreen }
-
-
-type ZoomState
-    = ZoomInactive
-    | ZoomStart (Point3d.Point3d Unitless (ZoomSpace Pixels Geometry.Scene))
-    | ZoomTarget (Point3d.Point3d Unitless (ZoomSpace Pixels Geometry.Scene))
 
 
 empty : VScreen -> EntityId -> Scene
@@ -132,6 +126,13 @@ empty windowSize rootId =
             { drawing
                 | entities = Dict.insert id entity drawing.entities
             }
+
+        camera =
+            Camera2d.zoomedAt
+                Point2d.origin
+                (Quantity.rate (Pixels.float Config.config.defaultZoom)
+                    (Quantity.float 1.0)
+                )
     in
     Spec.scene
         { update = updateScene
@@ -151,13 +152,8 @@ empty windowSize rootId =
                 (OnGestureMsg Div)
                 |> Pointer.apply divPointerHandler
         , gestureCondition = NoGesture
-        , camera =
-            Camera2d.zoomedAt
-                Point2d.origin
-                (Quantity.rate (Pixels.float Config.config.defaultZoom)
-                    (Quantity.float 1.0)
-                )
-        , zoomAnimation = Animator.init ZoomInactive
+        , camera = camera
+        , zoomAnimation = Animation.static (Camera2d.toZoomSpace camera)
         , mousePos = Point2d.origin
         , entities = Dict.empty
         , nextId = ""
@@ -184,20 +180,15 @@ subscriptionsScene model =
         }
         model.gesturesOnDoc
         (GestureEvent.gestureDecoder Config.config.containerElementId)
-    , case Animator.current model.zoomAnimation of
-        ZoomInactive ->
-            Sub.none
-
-        _ ->
-            Animator.toSubscription Tick model animator
+    , Animation.subscriptions animator Tick model
     ]
         |> Sub.batch
 
 
-animator : Animator.Animator Drawing
+animator : Animator Drawing
 animator =
-    Animator.animator
-        |> Animator.watching
+    Animation.empty
+        |> Animation.animate
             .zoomAnimation
             (\x m -> { m | zoomAnimation = x })
 
@@ -265,7 +256,7 @@ updateScene msg drawing raise =
                 |> Tuple.mapFirst raise
 
         Tick newTime ->
-            Animator.update newTime animator drawing
+            Animation.step newTime animator drawing
                 |> U2.pure
                 |> U2.andThen animateCamera
                 |> Tuple.mapFirst raise
@@ -322,19 +313,7 @@ animateCamera : Drawing -> ( Drawing, Cmd Msg )
 animateCamera drawing =
     let
         zoomSpace =
-            Animator.xyz drawing.zoomAnimation
-                (\state ->
-                    case state of
-                        ZoomInactive ->
-                            Point3d.origin |> Point3d.toUnitless |> xyzToMovement
-
-                        ZoomStart zs ->
-                            zs |> Point3d.toUnitless |> xyzToMovement
-
-                        ZoomTarget zs ->
-                            zs |> Point3d.toUnitless |> xyzToMovement
-                )
-                |> Point3d.fromUnitless
+            Animation.value drawing.zoomAnimation
 
         camera =
             Camera2d.fromZoomSpace zoomSpace
@@ -343,26 +322,11 @@ animateCamera drawing =
             Quantity.at_ (Quantity.unsafe 1.0) (Camera2d.zoom camera)
                 |> Quantity.toFloat
     in
-    case Animator.arrived drawing.zoomAnimation of
-        ZoomStart _ ->
-            U2.pure
-                { drawing
-                    | camera = camera
-                    , zoom = zoom
-                }
-
-        _ ->
-            U2.pure { drawing | zoomAnimation = Animator.init ZoomInactive }
-
-
-xyzToMovement :
-    { x : Float, y : Float, z : Float }
-    -> { x : Animator.Movement, y : Animator.Movement, z : Animator.Movement }
-xyzToMovement xyz =
-    { x = Animator.at xyz.x
-    , y = Animator.at xyz.y
-    , z = Animator.at xyz.z
-    }
+    U2.pure
+        { drawing
+            | camera = camera
+            , zoom = zoom
+        }
 
 
 zoomToBox : PScene -> BLocal -> Float -> Drawing -> Drawing
@@ -395,16 +359,19 @@ zoomToBox pos bbox scale model =
         -- Derive the animation start and end states through ZoomSpace.
         start =
             Camera2d.toZoomSpace model.camera
-                |> ZoomStart
 
         target =
             targetZoomSpace
-                |> ZoomTarget
     in
     { model
         | zoomAnimation =
-            Animator.init start
-                |> Animator.go Animator.quickly target
+            Animation.timeline
+                { start = start
+                , end = target
+                , durationMs = 100
+                , easing = Ease.outQuad
+                , interpolate = Point3d.interpolateFrom
+                }
     }
 
 

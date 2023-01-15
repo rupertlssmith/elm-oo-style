@@ -1,5 +1,5 @@
 module Animation exposing
-    ( Timeline, timeline, value
+    ( Timeline, timeline, static, value
     , Animator, empty, animate
     , subscriptions, step
     )
@@ -28,7 +28,7 @@ function.
 
 # Build a timeline and get the animated value.
 
-@docs Timeline, timeline, value
+@docs Timeline, timeline, static, value
 
 
 # Build an animator of timelines.
@@ -61,7 +61,7 @@ type Timeline a
         , easing : Float -> Float
         , start : a
         , end : a
-        , interpolate : Float -> a -> a -> a
+        , interpolate : a -> a -> Float -> a
         }
     | Running
         { startMs : Int
@@ -69,7 +69,7 @@ type Timeline a
         , easing : Float -> Float
         , start : a
         , end : a
-        , interpolate : Float -> a -> a -> a
+        , interpolate : a -> a -> Float -> a
         , curValue : a
         }
     | Complete { curValue : a }
@@ -87,8 +87,8 @@ to listen to the animation frame callback and generate messages when it is ready
 The subscription will only be active if the animation has Running states.
 
 -}
-subscriptions : mdl -> Animator mdl -> (Posix -> msg) -> Sub msg
-subscriptions model (Animator isActive _) toMsg =
+subscriptions : Animator mdl -> (Posix -> msg) -> mdl -> Sub msg
+subscriptions (Animator isActive _) toMsg model =
     if isActive model then
         Browser.Events.onAnimationFrame toMsg
 
@@ -143,16 +143,16 @@ animate getter setter (Animator isActive stepModel) =
                         nextProgress =
                             toFloat (nowMs - startMs) / toFloat durationMs
                     in
-                    if nextProgress >= 1.0 then
+                    if nextProgress <= 1.0 then
                         setter
                             (Running
                                 { durationMs = durationMs
                                 , easing = easing
-                                , startMs = nowMs
+                                , startMs = startMs
                                 , start = start
                                 , end = end
                                 , interpolate = interpolate
-                                , curValue = interpolate nextProgress start end
+                                , curValue = interpolate start end (easing nextProgress)
                                 }
                             )
                             model
@@ -161,7 +161,7 @@ animate getter setter (Animator isActive stepModel) =
                     else
                         let
                             endValue =
-                                interpolate 1.0 start end
+                                interpolate start end 1.0
                         in
                         setter (Complete { curValue = endValue }) model
                             |> stepModel nowMs
@@ -185,11 +185,18 @@ timeline :
     , easing : Float -> Float
     , start : a
     , end : a
-    , interpolate : Float -> a -> a -> a
+    , interpolate : a -> a -> Float -> a
     }
     -> Timeline a
 timeline animSpec =
     Ready animSpec
+
+
+{-| Creates a Timeline that is inactive and has a static value.
+-}
+static : a -> Timeline a
+static val =
+    Complete { curValue = val }
 
 
 {-| Gets the current value from a timeline.
