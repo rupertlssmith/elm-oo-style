@@ -72,12 +72,10 @@ view (Scene scene) =
 type alias Drawing =
     { window : BScreen
     , frame : BScreen
-    , zoom : Float
     , gesturesOnDoc : Pointer.Model GestureEvent Msg Screen
     , gesturesOnDiv : Pointer.Model GestureEvent Msg Screen
     , gestureCondition : GestureCondition
-    , camera : Camera2d Unitless Pixels Geometry.Scene
-    , zoomAnimation : Timeline (Camera2d Unitless Pixels Geometry.Scene)
+    , camera : Timeline (Camera2d Unitless Pixels Geometry.Scene)
     , mousePos : PScreen
     , entities : Dict EntityId (Entity Msg)
     , nextId : EntityId
@@ -141,7 +139,6 @@ empty windowSize rootId =
         }
         { window = frame
         , frame = drawingFrameFromWindow frame
-        , zoom = Config.config.defaultZoom
         , gesturesOnDoc =
             Pointer.init Nothing
                 (OnGestureMsg Doc)
@@ -151,8 +148,7 @@ empty windowSize rootId =
                 (OnGestureMsg Div)
                 |> Pointer.apply divPointerHandler
         , gestureCondition = NoGesture
-        , camera = camera
-        , zoomAnimation = Animate.static camera
+        , camera = Animate.static camera
         , mousePos = Point2d.origin
         , entities = Dict.empty
         , nextId = ""
@@ -188,8 +184,8 @@ animator : Animator Drawing
 animator =
     Animate.empty
         |> Animate.animate
-            .zoomAnimation
-            (\x m -> { m | zoomAnimation = x })
+            .camera
+            (\x m -> { m | camera = x })
 
 
 
@@ -257,7 +253,6 @@ updateScene msg drawing raise =
         Tick newTime ->
             Animate.step newTime animator drawing
                 |> U2.pure
-                |> U2.andThen animateCamera
                 |> Tuple.mapFirst raise
 
         _ ->
@@ -289,47 +284,39 @@ processGesture loc gestureMsg model =
 adjustZoom : Pointer.ScaleArgs Screen -> Drawing -> ( Drawing, Cmd Msg )
 adjustZoom wheelEvent drawing =
     let
-        newZoom =
-            (drawing.zoom * wheelEvent.scale)
-                |> clamp Config.config.minZoom Config.config.maxZoom
-    in
-    U2.pure
-        { drawing
-            | zoom = newZoom
-            , camera =
-                Camera2d.setZoomAtScreenPoint
-                    (Quantity.rate
-                        (Pixels.float newZoom)
-                        (Quantity.float 1.0)
-                    )
-                    wheelEvent.pos
-                    drawing.frame
-                    drawing.camera
-        }
-
-
-animateCamera : Drawing -> ( Drawing, Cmd Msg )
-animateCamera drawing =
-    let
         camera =
-            Animate.value drawing.zoomAnimation
+            Animate.value drawing.camera
 
         zoom =
             Quantity.at_ (Quantity.unsafe 1.0) (Camera2d.zoom camera)
                 |> Quantity.toFloat
+
+        newZoom =
+            (zoom * wheelEvent.scale)
+                |> clamp Config.config.minZoom Config.config.maxZoom
+
+        newCamera =
+            Camera2d.setZoomAtScreenPoint
+                (Quantity.rate
+                    (Pixels.float newZoom)
+                    (Quantity.float 1.0)
+                )
+                wheelEvent.pos
+                drawing.frame
+                camera
     in
     U2.pure
-        { drawing
-            | camera = camera
-            , zoom = zoom
-        }
+        { drawing | camera = Animate.staticIfInactive newCamera drawing.camera }
 
 
 zoomToBox : PScene -> BLocal -> Float -> Drawing -> Drawing
 zoomToBox pos bbox scale model =
     let
+        camera =
+            Animate.value model.camera
+
         origin =
-            Camera2d.origin model.camera
+            Camera2d.origin camera
 
         translation =
             Vector2d.from origin pos
@@ -347,14 +334,14 @@ zoomToBox pos bbox scale model =
             Quantity.rate smallestFrameDim largestTargetDim
 
         target =
-            model.camera
+            camera
                 |> Camera2d.translateBy translation
                 |> Camera2d.setZoom zoom
     in
     { model
-        | zoomAnimation =
+        | camera =
             Animate.timeline
-                { start = model.camera
+                { start = camera
                 , end = target
                 , durationMs = 100
                 , easing = Ease.outQuad
@@ -367,9 +354,9 @@ moveCamera : VScene -> Drawing -> Drawing
 moveCamera vscene model =
     let
         camera =
-            Camera2d.translateBy vscene model.camera
+            Animate.value model.camera |> Camera2d.translateBy vscene
     in
-    { model | camera = camera }
+    { model | camera = Animate.staticIfInactive camera model.camera }
 
 
 onDrag : Pointer.DragArgs Screen -> EntityId -> (Drawing -> Scene) -> Drawing -> ( UpdateContext Msg, Cmd Msg )
@@ -383,11 +370,14 @@ onDrag args entityId raise model =
                 Dragging { prevPos } ->
                     prevPos
 
+        camera =
+            Animate.value model.camera
+
         prevPosScene =
-            Camera2d.pointToScene model.camera model.frame pp
+            Camera2d.pointToScene camera model.frame pp
 
         curPosScene =
-            Camera2d.pointToScene model.camera model.frame args.pos
+            Camera2d.pointToScene camera model.frame args.pos
 
         trans =
             Vector2d.from prevPosScene curPosScene
@@ -441,12 +431,19 @@ viewScene model =
 svgDrawing : Drawing -> Svg Msg
 svgDrawing drawing =
     let
+        camera =
+            Animate.value drawing.camera
+
+        zoom =
+            Quantity.at_ (Quantity.unsafe 1.0) (Camera2d.zoom camera)
+                |> Quantity.toFloat
+
         context : ViewContextIF Msg
         context =
             { noop = Noop
-            , zoom = drawing.zoom
+            , zoom = zoom
             , frame = drawing.frame
-            , camera = drawing.camera
+            , camera = camera
             , mousePos = drawing.mousePos
             }
 
@@ -458,7 +455,7 @@ svgDrawing drawing =
     in
     Svg.svg
         ([ SvgAttr.preserveAspectRatio (Align ScaleMid ScaleMid) Meet
-         , Camera2d.svgViewBoxWithFocus drawing.camera drawing.frame drawing.window
+         , Camera2d.svgViewBoxWithFocus camera drawing.frame drawing.window
          , SvgCore.svgNamespace
          , SvgAttr.shapeRendering RenderGeometricPrecision
          , HA.id drawing.rootId

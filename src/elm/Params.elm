@@ -1,5 +1,6 @@
 module Params exposing (view)
 
+import Animate exposing (Timeline)
 import Camera2d exposing (Camera2d)
 import Geometry exposing (BScreen, PScreen, Scene)
 import Html as H exposing (Html)
@@ -13,23 +14,26 @@ import Quantity exposing (Unitless)
 type alias Params a =
     { a
         | frame : BScreen
-        , camera : Camera2d Unitless Pixels Scene
         , mousePos : PScreen
+        , camera : Timeline (Camera2d Unitless Pixels Geometry.Scene)
     }
 
 
 view : Params a -> Html msg
 view model =
     let
+        camera =
+            Animate.value model.camera
+
         zoomPct =
-            Quantity.at (Camera2d.zoom model.camera) (Quantity.float 1.0)
+            Quantity.at (Camera2d.zoom camera) (Quantity.float 1.0)
                 |> Pixels.toFloat
                 |> (*) 100.0
                 |> round
                 |> String.fromInt
 
         cameraOrigin =
-            Camera2d.origin model.camera
+            Camera2d.origin camera
 
         pointToString p =
             let
@@ -50,13 +54,13 @@ view model =
 
         mouseScenePos =
             model.mousePos
-                |> Camera2d.pointToScene model.camera model.frame
+                |> Camera2d.pointToScene camera model.frame
                 |> pointToString
 
         checkPos =
             model.mousePos
-                |> Camera2d.pointToScene model.camera model.frame
-                |> Camera2d.pointToScreen model.camera model.frame
+                |> Camera2d.pointToScene camera model.frame
+                |> Camera2d.pointToScreen camera model.frame
                 |> pointToString
     in
     H.div

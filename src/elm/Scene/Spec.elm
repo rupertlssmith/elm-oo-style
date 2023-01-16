@@ -1,5 +1,6 @@
 module Scene.Spec exposing (..)
 
+import Animate exposing (Timeline)
 import Camera2d exposing (Camera2d)
 import Existential as E
 import Geometry exposing (BLocal, BScreen, PScene, PScreen, Screen, VScene, VScreen)
@@ -89,7 +90,7 @@ type UpdateContext msg
 
 type alias UpdateContextIF msg =
     { frame : BScreen
-    , camera : Camera2d Unitless Pixels Geometry.Scene
+    , camera : Timeline (Camera2d Unitless Pixels Geometry.Scene)
     , moveCamera : VScene -> UpdateContext msg
     , zoomToBox : PScene -> BLocal -> Float -> UpdateContext msg
     , updateEntity : EntityId -> Entity msg -> UpdateContext msg
@@ -99,7 +100,7 @@ type alias UpdateContextIF msg =
 
 type alias UpdateContextCons rep msg =
     { frame : rep -> BScreen
-    , camera : rep -> Camera2d Unitless Pixels Geometry.Scene
+    , camera : rep -> Timeline (Camera2d Unitless Pixels Geometry.Scene)
     , moveCamera : VScene -> rep -> rep
     , zoomToBox : PScene -> BLocal -> Float -> rep -> rep
     , updateEntity : EntityId -> Entity msg -> rep -> rep
