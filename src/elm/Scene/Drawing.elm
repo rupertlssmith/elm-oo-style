@@ -405,8 +405,7 @@ onDoubleTap : Pointer.PointArgs Screen -> EntityId -> (Drawing -> Scene) -> Draw
 onDoubleTap args entityId raise model =
     let
         context =
-            { model | gestureCondition = Dragging { prevPos = args.pos } }
-                |> toUpdateContext raise
+            toUpdateContext raise model
 
         newContext =
             Dict.get entityId model.entities
