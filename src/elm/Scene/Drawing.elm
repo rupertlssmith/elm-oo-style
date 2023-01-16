@@ -1,8 +1,8 @@
 module Scene.Drawing exposing (..)
 
-import Animation exposing (Animator, Timeline)
+import Animate exposing (Animator, Timeline)
 import BoundingBox2d
-import Camera2d exposing (Camera2d, ZoomSpace)
+import Camera2d exposing (Camera2d)
 import Config
 import Dict exposing (Dict)
 import Ease
@@ -13,7 +13,6 @@ import Html.Attributes as HA
 import Params
 import Pixels exposing (Pixels)
 import Point2d
-import Point3d exposing (Point3d)
 import Pointer
 import Ports
 import Quantity exposing (Unitless)
@@ -78,7 +77,7 @@ type alias Drawing =
     , gesturesOnDiv : Pointer.Model GestureEvent Msg Screen
     , gestureCondition : GestureCondition
     , camera : Camera2d Unitless Pixels Geometry.Scene
-    , zoomAnimation : Timeline (Point3d Unitless (ZoomSpace Pixels Geometry.Scene))
+    , zoomAnimation : Timeline (Camera2d Unitless Pixels Geometry.Scene)
     , mousePos : PScreen
     , entities : Dict EntityId (Entity Msg)
     , nextId : EntityId
@@ -153,7 +152,7 @@ empty windowSize rootId =
                 |> Pointer.apply divPointerHandler
         , gestureCondition = NoGesture
         , camera = camera
-        , zoomAnimation = Animation.static (Camera2d.toZoomSpace camera)
+        , zoomAnimation = Animate.static camera
         , mousePos = Point2d.origin
         , entities = Dict.empty
         , nextId = ""
@@ -180,15 +179,15 @@ subscriptionsScene model =
         }
         model.gesturesOnDoc
         (GestureEvent.gestureDecoder Config.config.containerElementId)
-    , Animation.subscriptions animator Tick model
+    , Animate.subscriptions animator Tick model
     ]
         |> Sub.batch
 
 
 animator : Animator Drawing
 animator =
-    Animation.empty
-        |> Animation.animate
+    Animate.empty
+        |> Animate.animate
             .zoomAnimation
             (\x m -> { m | zoomAnimation = x })
 
@@ -256,7 +255,7 @@ updateScene msg drawing raise =
                 |> Tuple.mapFirst raise
 
         Tick newTime ->
-            Animation.step newTime animator drawing
+            Animate.step newTime animator drawing
                 |> U2.pure
                 |> U2.andThen animateCamera
                 |> Tuple.mapFirst raise
@@ -312,11 +311,8 @@ adjustZoom wheelEvent drawing =
 animateCamera : Drawing -> ( Drawing, Cmd Msg )
 animateCamera drawing =
     let
-        zoomSpace =
-            Animation.value drawing.zoomAnimation
-
         camera =
-            Camera2d.fromZoomSpace zoomSpace
+            Animate.value drawing.zoomAnimation
 
         zoom =
             Quantity.at_ (Quantity.unsafe 1.0) (Camera2d.zoom camera)
@@ -350,27 +346,19 @@ zoomToBox pos bbox scale model =
         zoom =
             Quantity.rate smallestFrameDim largestTargetDim
 
-        targetZoomSpace =
+        target =
             model.camera
                 |> Camera2d.translateBy translation
                 |> Camera2d.setZoom zoom
-                |> Camera2d.toZoomSpace
-
-        -- Derive the animation start and end states through ZoomSpace.
-        start =
-            Camera2d.toZoomSpace model.camera
-
-        target =
-            targetZoomSpace
     in
     { model
         | zoomAnimation =
-            Animation.timeline
-                { start = start
+            Animate.timeline
+                { start = model.camera
                 , end = target
                 , durationMs = 100
                 , easing = Ease.outQuad
-                , interpolate = Point3d.interpolateFrom
+                , interpolate = Camera2d.interpolateFrom
                 }
     }
 
